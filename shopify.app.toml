@@ -1,0 +1,31 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "2662e293cb10d3a4144317a146af5130"
+name = "AppCyC"
+application_url = "https://api.cycsonido.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2026-04"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "write_products,read_products,write_inventory"
+
+[auth]
+redirect_urls = [
+  "https://api.cycsonido.com/auth",
+  "https://api.cycsonido.com/auth/callback",
+  "https://api.cycsonido.com/auth/login"
+]
