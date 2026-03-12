@@ -126,20 +126,66 @@ async function procesarItems(items: SiesaItem[], admin: AdminApiContext): Promis
     const batch = skus.slice(i, i + SKU_BATCH);
     const skuQuery = batch.map((sku) => `sku:'${sku}'`).join(" OR ");
 
-    const resp = await admin.graphql(QUERY_INVENTORY_BY_SKU, {
-      variables: { skuQuery, first: batch.length },
-    });
+    const loteLabel = `Lote [${i}–${i + batch.length - 1}]`;
 
-    const json = (await resp.json()) as {
-      data?: {
-        inventoryItems?: {
-          edges: { node: { id: string; sku: string } }[];
+    // Reintento con backoff en caso de throttle de Shopify
+    let edges: { node: { id: string; sku: string } }[] = [];
+    let intentos = 0;
+    const MAX_INTENTOS = 3;
+
+    while (intentos < MAX_INTENTOS) {
+      intentos++;
+
+      const resp = await admin.graphql(QUERY_INVENTORY_BY_SKU, {
+        variables: { skuQuery, first: batch.length },
+      });
+
+      const json = (await resp.json()) as {
+        data?: {
+          inventoryItems?: {
+            edges: { node: { id: string; sku: string } }[];
+          };
+        };
+        errors?: { message: string }[];
+        extensions?: {
+          cost?: {
+            throttleStatus?: {
+              currentlyAvailable: number;
+              restoreRate: number;
+            };
+          };
         };
       };
-    };
 
-    const edges = json.data?.inventoryItems?.edges ?? [];
-    logInfo(`  Lote [${i}–${i + batch.length - 1}]: enviados ${batch.length} SKUs → Shopify devolvió ${edges.length} resultado(s)`);
+      // Detectar errores GraphQL (throttle u otro)
+      if (json.errors && json.errors.length > 0) {
+        const errMsg = json.errors.map((e) => e.message).join("; ");
+        const throttleStatus = json.extensions?.cost?.throttleStatus;
+        if (throttleStatus) {
+          const waitMs = Math.ceil((1 / throttleStatus.restoreRate) * 1000) * 2;
+          logError(`  ${loteLabel}: throttle Shopify (disponible=${throttleStatus.currentlyAvailable}). Esperando ${waitMs}ms antes de reintentar (intento ${intentos}/${MAX_INTENTOS})`);
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+        logError(`  ${loteLabel}: error GraphQL: "${errMsg}" — SKUs omitidos en este lote`);
+        break;
+      }
+
+      if (!json.data) {
+        logError(`  ${loteLabel}: respuesta sin 'data' de Shopify — posible throttle silencioso. Esperando 2s (intento ${intentos}/${MAX_INTENTOS})`);
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+
+      edges = json.data.inventoryItems?.edges ?? [];
+      break;
+    }
+
+    if (intentos === MAX_INTENTOS && edges.length === 0) {
+      logError(`  ${loteLabel}: falló después de ${MAX_INTENTOS} intentos — lote omitido. SKUs: ${batch.join(", ")}`);
+    }
+
+    logInfo(`  ${loteLabel}: enviados ${batch.length} SKUs → Shopify devolvió ${edges.length} resultado(s)`);
 
     for (const { node } of edges) {
       const cantidad = siesaMap.get(node.sku);
@@ -147,7 +193,6 @@ async function procesarItems(items: SiesaItem[], admin: AdminApiContext): Promis
         logInfo(`  SKU "${node.sku}" (id: ${node.id}): encontrado en Shopify pero NO en siesaMap (posible diferencia de formato)`);
         continue;
       }
-      logInfo(`  SKU "${node.sku}" (id: ${node.id}): cantidad=${cantidad} ✓`);
       quantities.push({ inventoryItemId: node.id, locationId, quantity: cantidad });
     }
   }
