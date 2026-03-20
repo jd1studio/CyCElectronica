@@ -287,7 +287,13 @@ export async function ejecutarSyncCompleto(): Promise<{ totalItems: number; tota
     const items = data.detalle?.Table ?? [];
     logInfo(`Página ${numPag}: ${items.length} items recibidos`);
 
-    const actualizadosPagina = await procesarItems(items, admin);
+    const itemsFiltrados = items.filter((item) => String(item.f150_id).trim() === "00103");
+    const omitidosFiltro = items.length - itemsFiltrados.length;
+    if (omitidosFiltro > 0) {
+      logInfo(`Página ${numPag}: ${omitidosFiltro} items omitidos por f150_id ≠ 00103`);
+    }
+
+    const actualizadosPagina = await procesarItems(itemsFiltrados, admin);
     totalItems += items.length;
     totalActualizados += actualizadosPagina;
 
